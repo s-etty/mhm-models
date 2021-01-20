@@ -23,8 +23,11 @@ lots <- read_delim(file = fp, delim = "|", col_names = lots_columns,
 
 #clean the data a bit
 lots <- lots %>%
+  #strip whitespace from all character columns. skips the datetime column
+  #convert degrees_f into integer
   mutate(across(where(is.character), str_trim),
          degrees_f = as.integer(degrees_f)) %>%
+  #split the wind into wind speed and units. convert wind_speed to integer
   separate(wind, into = c("wind_speed", "wind_units"), sep = " ") %>%
   mutate(wind_speed = as.integer(wind_speed))
 
