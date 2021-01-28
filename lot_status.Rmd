@@ -1,0 +1,194 @@
+---
+title: "Lot Status"
+date: "Last Refresh: `r Sys.time()`"
+output:
+  rmdformats::html_clean:
+    highlight: kate
+---
+
+
+```{r setup, echo=FALSE, cache=FALSE}
+library(knitr)
+library(rmdformats)
+
+## Global options
+options(max.print="75")
+opts_chunk$set(echo=FALSE,
+	             cache=TRUE,
+               prompt=FALSE,
+               tidy=TRUE,
+               comment=NA,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(width=75)
+```
+```{r}
+
+library(readr)
+library(tidyr)
+library(dplyr)
+library(lubridate)
+library(stringr)
+library(ggplot2)
+library(scales)
+library(plotly)
+
+#column names for the log.txt
+lots_columns <- c("collection_timestamp", "lot_name", "status",
+                  "degrees_f", "wind", "short_forecast")
+#the url to the log.txt file
+fp <- "https://snowpackmap.com/logs/log.txt"
+
+#read the log from the URL, delimited by |
+#then assign colnames
+lots <- read_delim(file = fp, delim = "|", col_names = lots_columns,
+                   col_types = cols(
+                     collection_timestamp = col_character(),
+                     lot_name = col_character(),
+                     status = col_character(),
+                     degrees_f = col_character(),
+                     wind = col_character(),
+                     short_forecast = col_character()
+                   ))
+
+#clean the data a bit
+lots <- lots %>%
+  #strip whitespace from all character columns
+  #convert degrees_f into integer
+  mutate(across(where(is.character), str_trim),
+         degrees_f = as.integer(degrees_f),
+         collection_timestamp = dmy_hms(collection_timestamp,
+                                        tz = "America/Los_Angeles")) %>%
+  #split the wind into wind speed and units. convert wind_speed to integer
+  separate(wind, into = c("wind_speed", "wind_units"), sep = " ") %>%
+  mutate(wind_speed = as.integer(wind_speed))
+
+```
+## Main Lot
+
+```{r}
+
+lots <- lots %>%
+  mutate(weekday = wday(collection_timestamp, label = TRUE),
+         rounded_timestamp = floor_date(collection_timestamp, unit = "5 mins"),
+         adjusted_timestamp = update(rounded_timestamp, year = 2021,
+                                     month = 1, day = 1),
+         time = strftime(rounded_timestamp, format="%I:%M:%S %p"),
+         date = date(collection_timestamp),
+         status = factor(status, levels = c("Open", "Standby", "Closed")))
+
+start_date <- min(lots$date)
+end_date <- max(lots$date)
+opening_time <- ymd_hms("2021-01-01 09:00:00", tz = "America/Los_Angeles")
+
+main <- lots %>%
+  filter(lot_name == "Main")
+
+hrm <- lots %>%
+  filter(lot_name == "HRM")
+
+twilight <- lots %>%
+  filter(lot_name == "Twilight")
+
+sunrise <- lots %>%
+  filter(lot_name == "Sunrise")
+
+# plot <- ggplot(data = lots1, aes(x = date, y = test_time, color = status)) +
+#   geom_point() +
+#   scale_y_datetime(breaks = "4 hour", labels = date_format("%I:%M:%S %p",
+#                                                            tz = "America/Los_Angeles")) +
+#   facet_grid(rows = vars(lot_name))
+# plot
+# plotly::ggplotly(plot)
+
+plot <- plot_ly(data = main, x = ~ date, y = ~ adjusted_timestamp,
+                text = ~ paste('<i>Date</i>: ', date,
+                            '<br><b>Time</b>: ', time,
+                            '<br><b>Week Day</b>: ', weekday,
+                            '<br><b>Lot Status</b>: ', status),
+                hoverinfo = 'text') %>%
+  add_markers(marker = list(size = 3),
+              color = ~ status) %>%
+  add_segments(x = start_date, xend = end_date,
+               y = opening_time, yend = opening_time,
+               line = list(color = "steelblue"),
+               name = "Opening Time",
+               opacity = 0.75) %>%
+  layout(xaxis = list(title = "Date"),
+         yaxis = list(title = "Time",
+                      tickformat = "%I:%M %p"))
+partial_bundle(plot)
+
+```
+
+## HRM
+
+```{r}
+
+plot <- plot_ly(data = hrm, x = ~ date, y = ~ adjusted_timestamp,
+                text = ~ paste('<i>Date</i>: ', date,
+                            '<br><b>Time</b>: ', time,
+                            '<br><b>Week Day</b>: ', weekday,
+                            '<br><b>Lot Status</b>: ', status),
+                hoverinfo = 'text') %>%
+  add_markers(marker = list(size = 3),
+              color = ~ status) %>%
+  add_segments(x = start_date, xend = end_date,
+               y = opening_time, yend = opening_time,
+               line = list(color = "steelblue"),
+               name = "Opening Time",
+               opacity = 0.75) %>%
+  layout(xaxis = list(title = "Date"),
+         yaxis = list(title = "Time",
+                      tickformat = "%I:%M %p"))
+partial_bundle(plot)
+
+```
+
+## Sunrise
+
+```{r}
+
+plot <- plot_ly(data = sunrise, x = ~ date, y = ~ adjusted_timestamp,
+                text = ~ paste('<i>Date</i>: ', date,
+                            '<br><b>Time</b>: ', time,
+                            '<br><b>Week Day</b>: ', weekday,
+                            '<br><b>Lot Status</b>: ', status),
+                hoverinfo = 'text') %>%
+  add_markers(marker = list(size = 3),
+              color = ~ status) %>%
+  add_segments(x = start_date, xend = end_date,
+               y = opening_time, yend = opening_time,
+               line = list(color = "steelblue"),
+               name = "Opening Time",
+               opacity = 0.75) %>%
+  layout(xaxis = list(title = "Date"),
+         yaxis = list(title = "Time",
+                      tickformat = "%I:%M %p"))
+partial_bundle(plot)
+
+```
+
+## Twilight
+
+```{r}
+
+plot <- plot_ly(data = twilight, x = ~ date, y = ~ adjusted_timestamp,
+                text = ~ paste('<i>Date</i>: ', date,
+                            '<br><b>Time</b>: ', time,
+                            '<br><b>Week Day</b>: ', weekday,
+                            '<br><b>Lot Status</b>: ', status),
+                hoverinfo = 'text') %>%
+  add_markers(marker = list(size = 3),
+              color = ~ status) %>%
+  add_segments(x = start_date, xend = end_date,
+               y = opening_time, yend = opening_time,
+               line = list(color = "steelblue"),
+               name = "Opening Time",
+               opacity = 0.75) %>%
+  layout(xaxis = list(title = "Date"),
+         yaxis = list(title = "Time",
+                      tickformat = "%I:%M %p"))
+partial_bundle(plot)
+
+```
