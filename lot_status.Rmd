@@ -63,11 +63,10 @@ lots <- lots %>%
   separate(wind, into = c("wind_speed", "wind_units"), sep = " ") %>%
   mutate(wind_speed = as.integer(wind_speed))
 
-```
-## Main Lot
-
-```{r}
-
+#create some new variables for plotting
+#the weekday, timestamps, rounded to nearest 5min,
+#a datetime with a common date and the time portion from each row
+#the time as a string, the date, and factoring the status
 lots <- lots %>%
   mutate(weekday = wday(collection_timestamp, label = TRUE),
          rounded_timestamp = floor_date(collection_timestamp, unit = "5 mins"),
@@ -77,10 +76,29 @@ lots <- lots %>%
          date = date(collection_timestamp),
          status = factor(status, levels = c("Open", "Standby", "Closed")))
 
+#label each run for each lot and day
+#when the runid changes, the lot has switched status
+#so the first row in each group represents the time at which there was a change
+#except the first group
+closing_times <- lots %>%
+  group_by(lot_name, date) %>%
+  mutate(runid = data.table::rleid(status)) %>%
+  ungroup() %>%
+  group_by(lot_name, date, runid) %>%
+  slice(1)
+
+#get the start and end date for plotting
+#get the opening time also for plotting
 start_date <- min(lots$date)
 end_date <- max(lots$date)
 opening_time <- ymd_hms("2021-01-01 09:00:00", tz = "America/Los_Angeles")
 
+```
+## Main Lot
+
+```{r}
+
+#split the lots into separate DF's
 main <- lots %>%
   filter(lot_name == "Main")
 
@@ -101,14 +119,20 @@ sunrise <- lots %>%
 # plot
 # plotly::ggplotly(plot)
 
+#plotting the lot closing times
+#the date will go on the x axis and the y will be the times
+#the times are datetime objects, but they all share the same date just
+#different times. Color by status. Hover info is custom
 plot <- plot_ly(data = main, x = ~ date, y = ~ adjusted_timestamp,
                 text = ~ paste('<i>Date</i>: ', date,
                             '<br><b>Time</b>: ', time,
                             '<br><b>Week Day</b>: ', weekday,
                             '<br><b>Lot Status</b>: ', status),
                 hoverinfo = 'text') %>%
+  #make the markers small and color by status
   add_markers(marker = list(size = 3),
               color = ~ status) %>%
+  #add a straight line for the opening time at 9:00 AM
   add_segments(x = start_date, xend = end_date,
                y = opening_time, yend = opening_time,
                line = list(color = "steelblue"),
