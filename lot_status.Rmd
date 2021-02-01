@@ -56,12 +56,12 @@ lots <- lots %>%
   #strip whitespace from all character columns
   #convert degrees_f into integer
   mutate(across(where(is.character), str_trim),
-         degrees_f = as.integer(degrees_f),
+         #degrees_f = as.integer(degrees_f),
          collection_timestamp = dmy_hms(collection_timestamp,
                                         tz = "America/Los_Angeles")) %>%
   #split the wind into wind speed and units. convert wind_speed to integer
   separate(wind, into = c("wind_speed", "wind_units"), sep = " ") %>%
-  mutate(wind_speed = as.integer(wind_speed))
+  mutate(wind_speed = as.integer(wind_speed)) 
 
 #create some new variables for plotting
 #the weekday, timestamps, rounded to nearest 5min,
@@ -73,8 +73,78 @@ lots <- lots %>%
          adjusted_timestamp = update(rounded_timestamp, year = 2021,
                                      month = 1, day = 1),
          time = strftime(rounded_timestamp, format="%I:%M:%S %p"),
-         date = date(collection_timestamp),
-         status = factor(status, levels = c("Open", "Standby", "Closed")))
+         hour = hour(rounded_timestamp),
+         date = date(collection_timestamp))
+
+#filtering the day when the scraper stopped because they changed the website
+bad_day <- lots %>%
+  #only care about data between 7 am and 4 pm
+  filter(hour >= 7 & hour <= 16) %>%
+  #bad day was the 29th of jan
+  filter(date == ymd("2021-01-29")) %>%
+  #can't be grouped for some reason. the fill will fail
+  ungroup()
+
+#create an interval of times from 7:00 AM to 16:00 PM by 5 minutes
+blank_interval <- merge(7:16, seq(0, 55, by = 5))
+#turn the intervals into a tibble to use with other dplyr functions
+blank_interval <- tibble(adjusted_timestamp = 
+                           ymd_hm(paste("2021-01-01 ",
+                                        blank_interval$x,
+                                        ":", blank_interval$y),
+                         tz = "America/Los_Angeles")) %>%
+  arrange()
+
+#begin cleaning for the main lot. need to fill the times when the main lot 
+#was full and when it was open
+main_clean <- bad_day %>%
+  #only the main lot filled that day so we only care about main
+  filter(lot_name == "Main") %>%
+  #join the time interval tibble with the three data points we have from that day
+  #will keep all the time intervals
+  right_join(blank_interval, by = "adjusted_timestamp") %>%
+  #sort by time
+  arrange(adjusted_timestamp) %>%
+  #fill the status using the three times we have
+  #it will first fill down, then go back and fill anything else up
+  tidyr::fill(status, .direction = "downup") %>%
+  #rounded_timestamp is going to be set to the adjusted timestamp for now
+  #lot name is all main for this
+  mutate(rounded_timestamp = adjusted_timestamp,
+         lot_name = "Main") %>%
+  select(lot_name, adjusted_timestamp, rounded_timestamp, status)
+
+#join the main lot data with the rest of the lots
+bad_day_clean <- c("HRM", "Sunrise", "Twilight") %>%
+  #bind the blank intervals tibble to the vector above
+  #this results in each item in the vector being repeated for the 
+  #whole interval, then all of them are combined into one DF
+  purrr::map_dfr(~ bind_cols(adjusted_timestamp = blank_interval,
+                             lot_name = .)) %>%
+  #set all the statuses to open, they did not close that day
+  mutate(status = "Open",
+         rounded_timestamp = adjusted_timestamp) %>%
+  #add the rows for the main lot data
+  bind_rows(main_clean) %>%
+  #update the rounded_timestamp to the correct day
+  mutate(rounded_timestamp = update(rounded_timestamp, year = 2021,
+                                    month = 1, day = 29),
+         date = date("2021-01-29")) %>%
+  #select only the columns we care about
+  select(lot_name, status, adjusted_timestamp, rounded_timestamp, date)
+
+#rejoining the bad day with the rest of the data
+lots <- lots %>%
+  #filter for everything but the bad day so we avoid duplicates in the 
+  #next statement
+  filter(date != date("2021-01-29")) %>%
+  #add the rows from the bad day df
+  bind_rows(bad_day_clean) %>%
+  #reapply the cleaning functions above to catch for the newly added rows
+  mutate(status = factor(status, levels = c("Open", "Standby", "Closed")),
+         time = strftime(rounded_timestamp, format="%I:%M:%S %p"),
+         date = date(rounded_timestamp),
+         weekday = wday(rounded_timestamp, label = TRUE))
 
 #label each run for each lot and day
 #when the runid changes, the lot has switched status
@@ -97,6 +167,14 @@ opening_time <- ymd_hms("2021-01-01 09:00:00", tz = "America/Los_Angeles")
 ## Main Lot
 
 ```{r}
+
+#filter so it's just the times the scraper is scheduled to run
+#i.e., from 7 AM to 4 PM
+lots <- lots %>%
+  filter(adjusted_timestamp >= ymd_hm("2021-01-01 07:00",
+                                      tz = "America/Los_Angeles") &
+           adjusted_timestamp <= ymd_hm("2021-01-01 16:00",
+                                        tz = "America/Los_Angeles"))
 
 #split the lots into separate DF's
 main <- lots %>%
@@ -130,10 +208,10 @@ plot <- plot_ly(data = main, x = ~ date, y = ~ adjusted_timestamp,
                             '<br><b>Lot Status</b>: ', status),
                 hoverinfo = 'text') %>%
   #make the markers small and color by status
-  add_markers(marker = list(size = 3),
+  add_markers(marker = list(size = 5),
               color = ~ status) %>%
   #add a straight line for the opening time at 9:00 AM
-  add_segments(x = start_date, xend = end_date,
+  add_segments(x = start_date, xend = end_date + days(1),
                y = opening_time, yend = opening_time,
                line = list(color = "steelblue"),
                name = "Opening Time",
@@ -155,7 +233,7 @@ plot <- plot_ly(data = hrm, x = ~ date, y = ~ adjusted_timestamp,
                             '<br><b>Week Day</b>: ', weekday,
                             '<br><b>Lot Status</b>: ', status),
                 hoverinfo = 'text') %>%
-  add_markers(marker = list(size = 3),
+  add_markers(marker = list(size = 5),
               color = ~ status) %>%
   add_segments(x = start_date, xend = end_date,
                y = opening_time, yend = opening_time,
@@ -179,7 +257,7 @@ plot <- plot_ly(data = sunrise, x = ~ date, y = ~ adjusted_timestamp,
                             '<br><b>Week Day</b>: ', weekday,
                             '<br><b>Lot Status</b>: ', status),
                 hoverinfo = 'text') %>%
-  add_markers(marker = list(size = 3),
+  add_markers(marker = list(size = 5),
               color = ~ status) %>%
   add_segments(x = start_date, xend = end_date,
                y = opening_time, yend = opening_time,
@@ -203,7 +281,7 @@ plot <- plot_ly(data = twilight, x = ~ date, y = ~ adjusted_timestamp,
                             '<br><b>Week Day</b>: ', weekday,
                             '<br><b>Lot Status</b>: ', status),
                 hoverinfo = 'text') %>%
-  add_markers(marker = list(size = 3),
+  add_markers(marker = list(size = 5),
               color = ~ status) %>%
   add_segments(x = start_date, xend = end_date,
                y = opening_time, yend = opening_time,
