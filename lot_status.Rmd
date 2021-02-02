@@ -154,15 +154,21 @@ lots <- lots %>%
          hour = hour(rounded_timestamp),
          weekday = wday(rounded_timestamp, label = TRUE))
 
-#if the time listed is better
+#if the time listed is earlier than the time the scraper caught the change
+#use the time listed
 extracted_close_times <- lots %>%
+  #extract the time MHM listed the lot closed
   mutate(extracted_close = str_extract(
     str_to_upper(degrees_f), "[0-9]{1,2}:[0-9]{2}[AP]M"),
     extracted_close = ymd_hm(paste0(date, extracted_close),
                                    tz = "America/Los_Angeles")) %>%
+  #get just the time listed, lot name, and status
   select(extracted_close, lot_name, status) %>%
+  #drop na rows
   drop_na() %>%
+  #only want one row for each closing time
   distinct(extracted_close, .keep_all = TRUE) %>%
+  #recreate some rows for joining
   mutate(rounded_timestamp = extracted_close,
          adjusted_timestamp = update(rounded_timestamp, year = 2021,
                                      month = 1, day = 1),
@@ -176,14 +182,18 @@ extracted_close_times <- lots %>%
 #so the first row in each group represents the time at which there was a change
 #except the first group
 closing_times <- lots %>%
+  #add the better extracted rows
   bind_rows(extracted_close_times) %>%
   arrange(rounded_timestamp) %>%
   group_by(lot_name, date) %>%
+  #label the runs
   mutate(runid = data.table::rleid(status)) %>%
   ungroup() %>%
   group_by(lot_name, date, runid) %>%
+  #the first row of each row is the time at which the status changed
   slice(1) %>%
   ungroup(runid) %>%
+  #the runid of 2 is the first a lot closes for main and hrm
   filter(runid == 2 & status != "Open") %>%
   select(date, rounded_timestamp, lot_name, status)
 
@@ -199,9 +209,10 @@ lots_and_closing <- lots %>%
   rowwise() %>%
   mutate(rounded_timestamp = if_else(status == "Open", as.POSIXct(NA), rounded_timestamp),
          closed = if_else(is.na(rounded_timestamp), FALSE, TRUE)) %>%
-  select(date, rounded_timestamp, closed)
+  ungroup() %>%
+  select(rounded_timestamp, closed, lot_name)
 
-test_ts <- ts
+test_ts <- ts(lots_and_closing, start = c(2021, 1, 16), frequency = 365)
 
 #get the start and end date for plotting
 #get the opening time also for plotting
