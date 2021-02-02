@@ -32,6 +32,7 @@ library(stringr)
 library(ggplot2)
 library(scales)
 library(plotly)
+library(fpp2)
 
 #column names for the log.txt
 lots_columns <- c("collection_timestamp", "lot_name", "status",
@@ -74,7 +75,13 @@ lots <- lots %>%
                                      month = 1, day = 1),
          time = strftime(rounded_timestamp, format="%I:%M:%S %p"),
          hour = hour(rounded_timestamp),
-         date = date(collection_timestamp))
+         date = date(rounded_timestamp)) %>%
+  #filter so it's just the times the scraper is scheduled to run
+  #i.e., from 7 AM to 4 PM
+  filter(adjusted_timestamp >= ymd_hm("2021-01-01 07:00",
+                                      tz = "America/Los_Angeles") &
+           adjusted_timestamp <= ymd_hm("2021-01-01 16:00",
+                                        tz = "America/Los_Angeles"))
 
 #filtering the day when the scraper stopped because they changed the website
 bad_day <- lots %>%
@@ -85,8 +92,8 @@ bad_day <- lots %>%
   #can't be grouped for some reason. the fill will fail
   ungroup()
 
-#create an interval of times from 7:00 AM to 16:00 PM by 5 minutes
-blank_interval <- merge(7:16, seq(0, 55, by = 5))
+#create an interval of times from 7:00 AM to 15:55 PM by 5 minutes
+blank_interval <- merge(7:15, seq(0, 55, by = 5))
 #turn the intervals into a tibble to use with other dplyr functions
 blank_interval <- tibble(adjusted_timestamp = 
                            ymd_hm(paste("2021-01-01 ",
@@ -144,6 +151,24 @@ lots <- lots %>%
   mutate(status = factor(status, levels = c("Open", "Standby", "Closed")),
          time = strftime(rounded_timestamp, format="%I:%M:%S %p"),
          date = date(rounded_timestamp),
+         hour = hour(rounded_timestamp),
+         weekday = wday(rounded_timestamp, label = TRUE))
+
+#if the time listed is better
+extracted_close_times <- lots %>%
+  mutate(extracted_close = str_extract(
+    str_to_upper(degrees_f), "[0-9]{1,2}:[0-9]{2}[AP]M"),
+    extracted_close = ymd_hm(paste0(date, extracted_close),
+                                   tz = "America/Los_Angeles")) %>%
+  select(extracted_close, lot_name, status) %>%
+  drop_na() %>%
+  distinct(extracted_close, .keep_all = TRUE) %>%
+  mutate(rounded_timestamp = extracted_close,
+         adjusted_timestamp = update(rounded_timestamp, year = 2021,
+                                     month = 1, day = 1),
+         time = strftime(rounded_timestamp, format="%I:%M:%S %p"),
+         hour = hour(rounded_timestamp),
+         date = date(rounded_timestamp),
          weekday = wday(rounded_timestamp, label = TRUE))
 
 #label each run for each lot and day
@@ -151,11 +176,32 @@ lots <- lots %>%
 #so the first row in each group represents the time at which there was a change
 #except the first group
 closing_times <- lots %>%
+  bind_rows(extracted_close_times) %>%
+  arrange(rounded_timestamp) %>%
   group_by(lot_name, date) %>%
   mutate(runid = data.table::rleid(status)) %>%
   ungroup() %>%
   group_by(lot_name, date, runid) %>%
-  slice(1)
+  slice(1) %>%
+  ungroup(runid) %>%
+  filter(runid == 2 & status != "Open") %>%
+  select(date, rounded_timestamp, lot_name, status)
+
+lots_and_closing <- lots %>%
+  group_by(date, lot_name) %>%
+  slice(1) %>%
+  select(-collection_timestamp) %>%
+  left_join(closing_times, by = c("date" = "date",
+                                  "lot_name" = "lot_name")) %>%
+  mutate(status = coalesce(status.y, status.x),
+         rounded_timestamp = coalesce(rounded_timestamp.y, rounded_timestamp.x)) %>%
+  select(-status.x, -status.y, -rounded_timestamp.x, -rounded_timestamp.y) %>%
+  rowwise() %>%
+  mutate(rounded_timestamp = if_else(status == "Open", as.POSIXct(NA), rounded_timestamp),
+         closed = if_else(is.na(rounded_timestamp), FALSE, TRUE)) %>%
+  select(date, rounded_timestamp, closed)
+
+test_ts <- ts
 
 #get the start and end date for plotting
 #get the opening time also for plotting
@@ -167,15 +213,6 @@ opening_time <- ymd_hms("2021-01-01 09:00:00", tz = "America/Los_Angeles")
 ## Main Lot
 
 ```{r}
-
-#filter so it's just the times the scraper is scheduled to run
-#i.e., from 7 AM to 4 PM
-lots <- lots %>%
-  filter(adjusted_timestamp >= ymd_hm("2021-01-01 07:00",
-                                      tz = "America/Los_Angeles") &
-           adjusted_timestamp <= ymd_hm("2021-01-01 16:00",
-                                        tz = "America/Los_Angeles"))
-
 #split the lots into separate DF's
 main <- lots %>%
   filter(lot_name == "Main")
