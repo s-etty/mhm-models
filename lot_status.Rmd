@@ -210,9 +210,14 @@ lots_and_closing <- lots %>%
   mutate(rounded_timestamp = if_else(status == "Open", as.POSIXct(NA), rounded_timestamp),
          closed = if_else(is.na(rounded_timestamp), FALSE, TRUE)) %>%
   ungroup() %>%
-  select(rounded_timestamp, closed, lot_name)
+  select(rounded_timestamp, closed, lot_name, weekday)
 
-test_ts <- ts(lots_and_closing, start = c(2021, 1, 16), frequency = 365)
+main_only <- lots_and_closing %>%
+  filter(lot_name == "Main") %>%
+  mutate(weekday = as.factor(weekday),
+         closed = as.factor(closed))
+
+test_ts <- ts(main_only, start = c(2021, 1, 16), frequency = 7)
 
 #get the start and end date for plotting
 #get the opening time also for plotting
@@ -221,6 +226,16 @@ end_date <- max(lots$date)
 opening_time <- ymd_hms("2021-01-01 09:00:00", tz = "America/Los_Angeles")
 
 ```
+```{r}
+
+lot_model <- tslm(formula = closed ~ season, data = test_ts)
+summary(lot_model)
+checkresiduals(lot_model)
+temp <- forecast(lot_model)
+autoplot(temp)
+
+```
+
 ## Main Lot
 
 ```{r}
