@@ -25,16 +25,18 @@ ui <- fluidPage(
                                             lot_names, selectize=TRUE),
                                 dateRangeInput('date_range',
                                                label = 'Select Dates',
-                                               start = Sys.Date() - 21, end = Sys.Date())
+                                               start = Sys.Date() - 21, end = Sys.Date(),
+                                               min = start_date, max = end_date)
                                 ),
                             mainPanel(
                                 plotlyOutput("lot_trends")
                             )
                         ),
                ),
-               tabPanel("Summary",
+               tabPanel("Lot Predictions",
                         verbatimTextOutput("summary")
-               )
+               ),
+               tabPanel("About")
     )
 )
 
