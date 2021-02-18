@@ -14,30 +14,26 @@ library(plotly)
 library(lubridate)
 
 # Define UI for application that draws a histogram
-ui <- fluidPage(
-
-    # Application title
-    navbarPage("Mt Hood Meadows Parking Lots",
-               tabPanel("Lot Trends",
-                        sidebarLayout(
-                            sidebarPanel(
-                                selectInput('lot_name', 'Select Lot',
-                                            lot_names, selectize=TRUE),
-                                dateRangeInput('date_range',
-                                               label = 'Select Dates',
-                                               start = Sys.Date() - 21, end = Sys.Date(),
-                                               min = start_date, max = end_date)
-                                ),
-                            mainPanel(
-                                plotlyOutput("lot_trends")
-                            )
-                        ),
-               ),
-               tabPanel("Lot Predictions",
-                        verbatimTextOutput("summary")
-               ),
-               tabPanel("About")
-    )
+ui <- navbarPage("Mt Hood Meadows Parking Lots",
+                 tabPanel("Lot Trends",
+                          sidebarLayout(
+                              sidebarPanel(
+                                  selectInput('lot_name', 'Select Lot',
+                                              lot_names, selectize=TRUE),
+                                  dateRangeInput('date_range',
+                                                 label = 'Select Dates',
+                                                 start = Sys.Date() - 21, end = Sys.Date(),
+                                                 min = start_date, max = end_date)
+                              ),
+                              mainPanel(
+                                  plotlyOutput("lot_trends")
+                              )
+                          ),
+                 ),
+                 tabPanel("Lot Predictions",
+                          verbatimTextOutput("summary")
+                 ),
+                 tabPanel("About")
 )
 
 # Define server logic required to draw a histogram
