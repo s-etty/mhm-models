@@ -5,15 +5,15 @@ library(stringr)
 
 #column names for the log.txt
 lots_columns <- c("collection_timestamp", "lot_name", "status",
-             "degrees_f", "wind", "short_forecast")
+                  "degrees_f", "wind", "short_forecast")
 #the url to the log.txt file
-fp <- "https://snowpackmap.com/super_duper_top_secret_thingy_seriously_dont_look"
+fp <- "https://snowpackmap.com/logs/log.txt"
 
 #read the log from the URL, delimited by |
 #then assign colnames
 lots <- read_delim(file = fp, delim = "|", col_names = lots_columns,
                    col_types = cols(
-                     collection_timestamp = col_datetime(format = "%d/%m/%Y %H:%M:%S"),
+                     collection_timestamp = col_character(),
                      lot_name = col_character(),
                      status = col_character(),
                      degrees_f = col_character(),
@@ -23,11 +23,167 @@ lots <- read_delim(file = fp, delim = "|", col_names = lots_columns,
 
 #clean the data a bit
 lots <- lots %>%
-  #strip whitespace from all character columns. skips the datetime column
+  #strip whitespace from all character columns
   #convert degrees_f into integer
   mutate(across(where(is.character), str_trim),
-         degrees_f = as.integer(degrees_f)) %>%
+         #degrees_f = as.integer(degrees_f),
+         collection_timestamp = dmy_hms(collection_timestamp,
+                                        tz = "America/Los_Angeles")) %>%
   #split the wind into wind speed and units. convert wind_speed to integer
   separate(wind, into = c("wind_speed", "wind_units"), sep = " ") %>%
-  mutate(wind_speed = as.integer(wind_speed))
+  mutate(wind_speed = as.integer(wind_speed)) 
 
+#create some new variables for plotting
+#the weekday, timestamps, rounded to nearest 5min,
+#a datetime with a common date and the time portion from each row
+#the time as a string, the date, and factoring the status
+lots <- lots %>%
+  mutate(weekday = wday(collection_timestamp, label = TRUE),
+         rounded_timestamp = floor_date(collection_timestamp, unit = "5 mins"),
+         adjusted_timestamp = update(rounded_timestamp, year = 2021,
+                                     month = 1, day = 1),
+         time = strftime(rounded_timestamp, format="%I:%M:%S %p"),
+         hour = hour(rounded_timestamp),
+         date = date(rounded_timestamp)) %>%
+  #filter so it's just the times the scraper is scheduled to run
+  #i.e., from 7 AM to 4 PM
+  filter(adjusted_timestamp >= ymd_hm("2021-01-01 07:00",
+                                      tz = "America/Los_Angeles") &
+           adjusted_timestamp <= ymd_hm("2021-01-01 16:00",
+                                        tz = "America/Los_Angeles"))
+
+#filtering the day when the scraper stopped because they changed the website
+bad_day <- lots %>%
+  #only care about data between 7 am and 4 pm
+  filter(hour >= 7 & hour <= 16) %>%
+  #bad day was the 29th of jan
+  filter(date == ymd("2021-01-29")) %>%
+  #can't be grouped for some reason. the fill will fail
+  ungroup()
+
+#create an interval of times from 7:00 AM to 15:55 PM by 5 minutes
+blank_interval <- merge(7:15, seq(0, 55, by = 5))
+#turn the intervals into a tibble to use with other dplyr functions
+blank_interval <- tibble(adjusted_timestamp = 
+                           ymd_hm(paste("2021-01-01 ",
+                                        blank_interval$x,
+                                        ":", blank_interval$y),
+                                  tz = "America/Los_Angeles")) %>%
+  arrange()
+
+#begin cleaning for the main lot. need to fill the times when the main lot 
+#was full and when it was open
+main_clean <- bad_day %>%
+  #only the main lot filled that day so we only care about main
+  filter(lot_name == "Main") %>%
+  #join the time interval tibble with the three data points we have from that day
+  #will keep all the time intervals
+  right_join(blank_interval, by = "adjusted_timestamp") %>%
+  #sort by time
+  arrange(adjusted_timestamp) %>%
+  #fill the status using the three times we have
+  #it will first fill down, then go back and fill anything else up
+  tidyr::fill(status, .direction = "downup") %>%
+  #rounded_timestamp is going to be set to the adjusted timestamp for now
+  #lot name is all main for this
+  mutate(rounded_timestamp = adjusted_timestamp,
+         lot_name = "Main") %>%
+  select(lot_name, adjusted_timestamp, rounded_timestamp, status)
+
+#join the main lot data with the rest of the lots
+bad_day_clean <- c("HRM", "Sunrise", "Twilight") %>%
+  #bind the blank intervals tibble to the vector above
+  #this results in each item in the vector being repeated for the 
+  #whole interval, then all of them are combined into one DF
+  purrr::map_dfr(~ bind_cols(adjusted_timestamp = blank_interval,
+                             lot_name = .)) %>%
+  #set all the statuses to open, they did not close that day
+  mutate(status = "Open",
+         rounded_timestamp = adjusted_timestamp) %>%
+  #add the rows for the main lot data
+  bind_rows(main_clean) %>%
+  #update the rounded_timestamp to the correct day
+  mutate(rounded_timestamp = update(rounded_timestamp, year = 2021,
+                                    month = 1, day = 29),
+         date = date("2021-01-29")) %>%
+  #select only the columns we care about
+  select(lot_name, status, adjusted_timestamp, rounded_timestamp, date)
+
+#rejoining the bad day with the rest of the data
+lots <- lots %>%
+  #filter for everything but the bad day so we avoid duplicates in the 
+  #next statement
+  filter(date != date("2021-01-29")) %>%
+  #add the rows from the bad day df
+  bind_rows(bad_day_clean) %>%
+  #reapply the cleaning functions above to catch for the newly added rows
+  mutate(status = factor(status, levels = c("Open", "Standby", "Closed")),
+         time = strftime(rounded_timestamp, format="%I:%M:%S %p"),
+         date = date(rounded_timestamp),
+         hour = hour(rounded_timestamp),
+         weekday = wday(rounded_timestamp, label = TRUE))
+
+#if the time listed is earlier than the time the scraper caught the change
+#use the time listed
+extracted_close_times <- lots %>%
+  #extract the time MHM listed the lot closed
+  mutate(extracted_close = str_extract(
+    str_to_upper(degrees_f), "[0-9]{1,2}:[0-9]{2}[AP]M"),
+    extracted_close = ymd_hm(paste0(date, extracted_close),
+                             tz = "America/Los_Angeles")) %>%
+  #get just the time listed, lot name, and status
+  select(extracted_close, lot_name, status) %>%
+  #drop na rows
+  drop_na() %>%
+  #only want one row for each closing time
+  distinct(extracted_close, .keep_all = TRUE) %>%
+  #recreate some rows for joining
+  mutate(rounded_timestamp = extracted_close,
+         adjusted_timestamp = update(rounded_timestamp, year = 2021,
+                                     month = 1, day = 1),
+         time = strftime(rounded_timestamp, format="%I:%M:%S %p"),
+         hour = hour(rounded_timestamp),
+         date = date(rounded_timestamp),
+         weekday = wday(rounded_timestamp, label = TRUE))
+
+#label each run for each lot and day
+#when the runid changes, the lot has switched status
+#so the first row in each group represents the time at which there was a change
+#except the first group
+closing_times <- lots %>%
+  #add the better extracted rows
+  bind_rows(extracted_close_times) %>%
+  arrange(rounded_timestamp) %>%
+  group_by(lot_name, date) %>%
+  #label the runs
+  mutate(runid = data.table::rleid(status)) %>%
+  ungroup() %>%
+  group_by(lot_name, date, runid) %>%
+  #the first row of each row is the time at which the status changed
+  slice(1) %>%
+  ungroup(runid) %>%
+  #the runid of 2 is the first a lot closes for main and hrm
+  filter(runid == 2 & status != "Open") %>%
+  select(date, rounded_timestamp, lot_name, status)
+
+lots_and_closing <- lots %>%
+  group_by(date, lot_name) %>%
+  slice(1) %>%
+  select(-collection_timestamp) %>%
+  left_join(closing_times, by = c("date" = "date",
+                                  "lot_name" = "lot_name")) %>%
+  mutate(status = coalesce(status.y, status.x),
+         rounded_timestamp = coalesce(rounded_timestamp.y, rounded_timestamp.x)) %>%
+  select(-status.x, -status.y, -rounded_timestamp.x, -rounded_timestamp.y) %>%
+  rowwise() %>%
+  mutate(rounded_timestamp = if_else(status == "Open", as.POSIXct(NA), rounded_timestamp),
+         closed = if_else(is.na(rounded_timestamp), FALSE, TRUE)) %>%
+  ungroup() %>%
+  select(rounded_timestamp, closed, lot_name, weekday)
+
+#get the start and end date for plotting
+#get the opening time also for plotting
+start_date <- min(lots$date)
+end_date <- max(lots$date)
+opening_time <- ymd_hms("2021-01-01 09:00:00", tz = "America/Los_Angeles")
+lot_names <- distinct(lots, lot_name)
