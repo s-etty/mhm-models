@@ -8,6 +8,7 @@
 #
 
 source("get-log-data.R")
+source("create-models.R")
 
 library(shiny)
 library(plotly)

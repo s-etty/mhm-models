@@ -2,6 +2,7 @@ library(readr)
 library(tidyr)
 library(dplyr)
 library(stringr)
+library(lubridate)
 
 #column names for the log.txt
 lots_columns <- c("collection_timestamp", "lot_name", "status",
